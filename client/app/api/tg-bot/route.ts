@@ -1,20 +1,95 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 /* eslint-disable @typescript-eslint/no-unused-vars */
-import { ASK_OPENAI_AGENT_PROMPT } from "./../../../prompts/prompts";
+import { ASK_OPENAI_AGENT_PROMPT } from "@/prompts/prompts";
 import { NextRequest, NextResponse } from 'next/server';
 import { Account, Contract, RpcProvider, constants, ec, json, stark, hash, CallData } from "starknet";
 import axios, { AxiosError, AxiosResponse } from 'axios';
 import { ChatOpenAI } from "@langchain/openai";
-import { ChatPromptTemplate, PromptTemplate } from "@langchain/core/prompts";
+import { START, END, MessagesAnnotation, MemorySaver, StateGraph } from "@langchain/langgraph";
+import { RemoveMessage } from "@langchain/core/messages";
+import { ChatPromptTemplate, PromptTemplate, SystemMessagePromptTemplate, HumanMessagePromptTemplate } from "@langchain/core/prompts";
+
+const TIMEOUT = 30 * 60 * 1000;
+
+const MY_TOKEN = process.env.MY_TOKEN || '';
+const BOT_USERNAME = process.env.BOT_USERNAME || '';
+const BRIAN_API_KEY = process.env.BRIAN_API_KEY || '';
+const BASE_URL = `https://api.telegram.org/bot${MY_TOKEN}`;
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY || '';
+const BRIAN_DEFAULT_RESPONSE = "🤖 Sorry, I don’t know how to answer. The AskBrian feature allows you to ask for information on a custom-built knowledge base of resources. Contact the Brian team if you want to add new resources!";
+const BRIAN_API_URL = {
+  knowledge: 'https://api.brianknows.org/api/v0/agent/knowledge',
+  parameters: 'https://api.brianknows.org/api/v0/agent/parameters-extraction',
+  transaction: 'https://api.brianknows.org/api/v0/agent'
+};
+
+
+const systemPrompt = ASK_OPENAI_AGENT_PROMPT + `\nThe provided chat history includes a summary of the earlier conversation.`;
+const systemMessage = SystemMessagePromptTemplate.fromTemplate([
+  systemPrompt
+]);
+const userMessage = HumanMessagePromptTemplate.fromTemplate([
+  "{user_query}"
+]);
 
 const askAgentPromptTemplate = ChatPromptTemplate.fromMessages([
-  [
-    "system", ASK_OPENAI_AGENT_PROMPT
-  ],
-  [
-    "user", "{user_query}"
-  ]
+  systemMessage,
+  userMessage
 ]);
+
+const agent = new ChatOpenAI({
+  modelName: "gpt-4o",
+  temperature: 0.5,
+  openAIApiKey: OPENAI_API_KEY
+});
+
+const prompt = askAgentPromptTemplate;
+const chain = prompt.pipe(agent);
+const initialCallModel = async (state: typeof MessagesAnnotation.State) => {
+  const messages = [
+    await systemMessage.format({brianai_answer: BRIAN_DEFAULT_RESPONSE}),
+    ...state.messages
+  ];
+  const response = await agent.invoke(messages);
+  return { messages: response };
+};
+const callModel = async (state: typeof MessagesAnnotation.State ) => {
+  const messageHistory = state.messages.slice(0, -1);
+  if ( messageHistory.length >= 3 ) {
+    const lastHumanMessage = state.messages[state.messages.length - 1];
+    const summaryPrompt = `
+    Distill the above chat messages into a single summary message. 
+    Include as many specific details as you can.
+    IMPORTANT NOTE: Include all information related to user's nature about trading and what kind of trader he/she is. 
+    `;
+    const summaryMessage = HumanMessagePromptTemplate.fromTemplate([summaryPrompt]);
+    const summary =  await agent.invoke([
+      ...messageHistory,
+      { role: "user", content: summaryPrompt },
+    ]);
+    const deleteMessages = state.messages.map(
+      (m) => m.id ? new RemoveMessage({ id: m.id }) : null
+    );
+    const humanMessage = { role: "user", content: lastHumanMessage.content };
+    const response = await agent.invoke([
+      await systemMessage.format({brianai_answer: BRIAN_DEFAULT_RESPONSE}),
+      summary,
+      humanMessage,
+    ]);
+    //console.log(response);
+    return {
+      messages: [summary, humanMessage, response, ...deleteMessages],
+    };     
+  } else {
+    return await initialCallModel(state);
+  }
+};
+
+const workflow = new StateGraph(MessagesAnnotation)
+  .addNode("model", callModel)
+  .addEdge(START, "model")
+  .addEdge("model", END);
+const app = workflow.compile({ checkpointer: new MemorySaver() });
 
 class StarknetWallet {
   private provider: RpcProvider;
@@ -135,25 +210,6 @@ type CommandHandler = {
 }
 
 const userStates: UserStates = {};
-const TIMEOUT = 30 * 60 * 1000;
-
-const MY_TOKEN = process.env.MY_TOKEN || '';
-const BOT_USERNAME = process.env.BOT_USERNAME || '';
-const BRIAN_API_KEY = process.env.BRIAN_API_KEY || '';
-const BASE_URL = `https://api.telegram.org/bot${MY_TOKEN}`;
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY || '';
-const BRIAN_DEFAULT_RESPONSE = "🤖 Sorry, I don’t know how to answer. The AskBrian feature allows you to ask for information on a custom-built knowledge base of resources. Contact the Brian team if you want to add new resources!";
-const BRIAN_API_URL = {
-  knowledge: 'https://api.brianknows.org/api/v0/agent/knowledge',
-  parameters: 'https://api.brianknows.org/api/v0/agent/parameters-extraction',
-  transaction: 'https://api.brianknows.org/api/v0/agent'
-};
-
-const agent = new ChatOpenAI({
-  modelName: "gpt-4o",
-  temperature: 0.5,
-  openAIApiKey: OPENAI_API_KEY
-});
 
 class StarknetTransactionHandler {
   private provider: RpcProvider;
@@ -240,7 +296,7 @@ function isGroupChat(messageObj: Message): boolean {
   return messageObj.chat.type === 'group' || messageObj.chat.type === 'supergroup';
 }
 
-async function formatBrianResponse(response: string): Promise<string> {
+async function formatResponse(response: string): Promise<string> {
   // Remove unnecessary quotation marks
   let formattedText = response.replace(/^"|"$/g, '').trim();
   
@@ -281,7 +337,7 @@ async function sendMessage(messageObj: Message, messageText: string): Promise<Ax
       throw new Error('Invalid chat ID');
     }
     const formattedText = messageText.includes('###') 
-      ? await formatBrianResponse(messageText)
+      ? await formatResponse(messageText)
       : messageText;
 
     const result = await axiosInstance.get('sendMessage', {
@@ -300,12 +356,22 @@ async function sendMessage(messageObj: Message, messageText: string): Promise<Ax
   }
 }
 
-async function queryOpenAI(userQuery: string): Promise<string> {
+async function queryOpenAI({userQuery, brianaiResponse}: 
+  {userQuery: string, brianaiResponse: string}): 
+  Promise<string> {
   try {
-    const prompt = askAgentPromptTemplate;
-    const chain = prompt.pipe(agent)
-    const response = await chain.invoke({user_query: userQuery});
-    return response.content as string;
+    const response = await app.invoke(
+      {
+        messages: [
+          await prompt.format({brianai_answer: brianaiResponse, user_query: userQuery})
+        ],
+      },
+      {
+        configurable: { thread_id: "1" },
+      },
+    );
+    console.log(response);
+    return response.messages[response.messages.length-1].content as string;
   } catch (error) {
     console.error('OpenAI Error:', error);
     return 'Sorry, I am unable to process your request at the moment.';
@@ -318,23 +384,21 @@ async function queryBrianAI(prompt: string): Promise<string> {
       BRIAN_API_URL.knowledge,
       {
         prompt,
-        kb: 'starknet_kb'
+        kb: "starknet_kb"
       },
       {
         headers: {
-          'Content-Type': 'application/json',
-          'x-brian-api-key': BRIAN_API_KEY,
+          "Content-Type": "application/json",
+          "x-brian-api-key": BRIAN_API_KEY,
         }
       }
     );
-    const answer = response.data.result.answer; 
-    if (answer === BRIAN_DEFAULT_RESPONSE) {
-      return queryOpenAI(prompt);
-    }
-    return answer;
+    const brianaiAnswer = response.data.result.answer;
+    const openaiAnswer = await queryOpenAI({brianaiResponse: brianaiAnswer, userQuery: prompt});
+    return await formatResponse(openaiAnswer);
   } catch (error) {
-    console.error('Brian AI Error:', error);
-    return 'Sorry, I am unable to process your request at the moment.';
+    console.error("Brian AI Error:", error);
+    return "Sorry, I am unable to process your request at the moment.";
   }
 }
 

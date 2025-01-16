@@ -127,17 +127,57 @@ function TelegramMiniApp(): JSX.Element {
   }, [messages]);
 
   const handleConnect = async () => {
-    const argentTMA = getArgentTMA();
-    if (!argentTMA) return;
-
+    console.log("Connect button clicked");
+      
     try {
-      await argentTMA.requestConnection();
+      const argentTMA = getArgentTMA();
+      console.log("ArgentTMA instance:", argentTMA);
+      
+      if (!argentTMA) {
+        console.error("Failed to get ArgentTMA instance");
+        const errorMessage: Message = {
+          id: uuidv4(),
+          role: "agent",
+          content: "Failed to initialize wallet. Please try again.",
+          timestamp: new Date().toLocaleTimeString(),
+          user: "Agent",
+        };
+        setMessages(prev => [...prev, errorMessage]);
+        return;
+      }
+  
+      console.log('Requesting connection...');
+      await argentTMA.requestConnection({callbackData: 'test'});
+      console.log('Connection requested successfully');
+  
+      console.log('Attempting to connect...');
       const connection = await argentTMA.connect();
+      console.log('Connection response:', connection);
+  
       if (connection && connection.account.getSessionStatus() === "VALID") {
+        console.log('Account details:', connection.account);
         setAccount(connection.account);
+        const successMessage: Message = {
+          id: uuidv4(),
+          role: "agent",
+          content: "Wallet connected successfully! You can now proceed with transactions.",
+          timestamp: new Date().toLocaleTimeString(),
+          user: "Agent",
+        };
+        setMessages(prev => [...prev, successMessage]);
+      } else {
+        throw new Error("Invalid session after connection");
       }
     } catch (error) {
       console.error('Connection failed:', error);
+      // Add more detailed error logging
+      if (error instanceof Error) {
+        console.error('Error details:', {
+          message: error.message,
+          stack: error.stack,
+          name: error.name
+        });
+      }
     }
   };
 

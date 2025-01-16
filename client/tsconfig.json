@@ -1,28 +1,41 @@
 {
   "compilerOptions": {
-    "lib": ["dom", "dom.iterable", "esnext"],
+    "lib": [
+      "dom",
+      "dom.iterable",
+      "esnext"
+    ], // Keep DOM libraries for Next.js (client-side)
     "allowJs": true,
     "skipLibCheck": true,
     "strict": true,
-    "noEmit": true,
+    "noEmit": false, // Allow emitting JS files
     "esModuleInterop": true,
-    "module": "esnext",
-    "moduleResolution": "bundler",
+    "module": "commonjs", // CommonJS for Node.js compatibility
+    "moduleResolution": "node", // Use Node's module resolution strategy
     "resolveJsonModule": true,
     "isolatedModules": true,
-    "jsx": "preserve",
+    "jsx": "preserve", // Allow JSX to work in Next.js
     "incremental": true,
-    "target": "es2015",
-
+    "target": "esnext", // Use the latest ECMAScript features
+    "paths": {
+      "@/*": [
+        "./*"
+      ] // Adjust the path mapping if needed
+    },
     "plugins": [
       {
         "name": "next"
       }
-    ],
-    "paths": {
-      "@/*": ["./*"]
-    }
+    ]
   },
-  "include": ["next-env.d.ts", "**/*.ts", "**/*.tsx", ".next/types/**/*.ts"],
-  "exclude": ["node_modules"]
+  "include": [
+    "next-env.d.ts", // Keep the Next.js environment types
+    "**/*.ts",
+    "**/*.tsx",
+    ".next/types/**/*.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist" // Exclude the Node.js build directory
+  ]
 }

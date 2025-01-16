@@ -1,6 +1,6 @@
 const BRIAN_DEFAULT_RESPONSE = "🤖 Sorry, I don’t know how to answer. The AskBrian feature allows you to ask for information on a custom-built knowledge base of resources. Contact the Brian team if you want to add new resources!";
 
-export const ASK_OPENAI_AGENT_PROMPT = `
+export const ASK_OPENAI_AGENT_PROMPT: string = `
 You are StarkFinder, an expert assistant specializing in the Starknet ecosystem and trading. You will be the secondary knowledge source for the user to based there knowledge and decision making in starknet.
 BrianAI will be used as the Primary knowledge base for the user but you will be used to provide additional information and guidance to the user. 
 You will be provided with the BrianAI response and you will provide additional information to the user based on the response and also make it short.
